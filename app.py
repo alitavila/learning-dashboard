@@ -270,21 +270,34 @@ df_monitoring = pd.DataFrame(monitoring_data)
 df_monitoring = df_monitoring.sort_values(['Alert Level', 'Open Tickets', 'Completion Rate'], 
                                         ascending=[False, False, True])
 
-# Display monitoring table with conditional formatting
+# Format numeric columns before displaying
+df_monitoring = df_monitoring.assign(
+    **{
+        'Enrollments (7 Days)': df_monitoring['Enrollments (7 Days)'].apply(lambda x: f'{int(x):,}'),
+        'Enrollments (30 Days)': df_monitoring['Enrollments (30 Days)'].apply(lambda x: f'{int(x):,}'),
+        'Open Tickets': df_monitoring['Open Tickets'].apply(lambda x: f'{int(x):,}'),
+        'Total Tickets': df_monitoring['Total Tickets'].apply(lambda x: f'{int(x):,}'),
+        'Completion Rate': df_monitoring['Completion Rate'].apply(lambda x: f'{x:.1f}%')
+    }
+)
+
+# Use a simpler styling approach
+def highlight_alert_level(val):
+    if val == 'High':
+        return 'background-color: #ffcdd2'
+    elif val == 'Medium':
+        return 'background-color: #fff176'
+    elif val == 'Low':
+        return 'background-color: #c8e6c9'
+    return ''
+
+# Apply the styling
 st.dataframe(
-    df_monitoring.style
-    .format({
-        'Enrollments (7 Days)': '{:,.0f}',
-        'Enrollments (30 Days)': '{:,.0f}',
-        'Open Tickets': '{:,.0f}',
-        'Total Tickets': '{:,.0f}',
-        'Completion Rate': '{:.1f}%'
-    })
-    .background_gradient(subset=['Completion Rate'], cmap='RdYlGn')
-    .apply(lambda x: ['background-color: #ffcdd2' if v == 'High' else 
-                     'background-color: #fff176' if v == 'Medium' else 
-                     'background-color: #c8e6c9' for v in x], 
-           subset=['Alert Level'])
+    df_monitoring.style.apply(
+        lambda x: ['background-color: transparent' if i != 'Alert Level' else highlight_alert_level(x['Alert Level']) 
+                  for i in df_monitoring.columns],
+        axis=1
+    )
 )
 
 # Support Ticket Analysis Section
