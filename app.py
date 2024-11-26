@@ -659,3 +659,4 @@ if len(course_tickets_period) > 0:
         
         avg_resolution = np.mean(resolution_times)
         st.metric("Average Resolution Time (Business Days)", f"{avg_resolution:.1f} days")
+        
