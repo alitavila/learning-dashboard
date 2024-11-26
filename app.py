@@ -4,143 +4,101 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 import numpy as np
-from course_mapper import CourseNameMapper  # Add this new import
 
 # Set the dashboard title
-st.title("📊 Learning Dashboard")
+st.title("📊 DHIS2 Online Academy - Learning Dashboard")
 
 def calculate_business_days(start_date, end_date):
     """
     Calculate business days between two dates, handling invalid dates gracefully.
     """
     try:
+        # Convert to datetime if not already
         start_date = pd.to_datetime(start_date, errors='coerce')
         end_date = pd.to_datetime(end_date, errors='coerce')
         
+        # Check if either date is NaT
         if pd.isna(start_date) or pd.isna(end_date):
             return 0
         
+        # Calculate business days
         business_days = pd.date_range(start=start_date, end=end_date, freq='B')
         return len(business_days)
     except Exception as e:
         print(f"Error calculating business days: {e}")
         return 0
 
-# Note: We manually fixed French course names in the database files
-
+# Load and preprocess the data
 def load_and_preprocess_data():
-    """
-    Load and preprocess all data files with improved course name handling
-    """
     try:
-        # Initialize course mapper
-        from course_mapper import CourseNameMapper
-        mapper = CourseNameMapper()
-        
-        # Load and standardize the courses data first
+        # Load the courses data first
         df_courses = pd.read_excel('About the course.xlsx')
-        df_courses = mapper.standardize_dataframe(df_courses)
-        if df_courses.empty:
-            raise Exception("Failed to load course master list")
         print("Successfully loaded courses data")
         
-        # Load and standardize other dataframes
-        df_enrollments = pd.read_csv('all_enrollments.csv', encoding='ISO-8859-1')
-        df_enrollments = mapper.standardize_dataframe(df_enrollments)
+        # Load course name mapping
+        df_mapping = pd.read_csv('course_names_mapping.csv', encoding='utf-8')
         
-        # Diagnostic prints
-        print("\nENROLLMENT COUNT CHECK:")
-        total_records = len(df_enrollments)
-        unique_students = df_enrollments['Email'].nunique()
-        print(f"Total enrollment records in file: {total_records}")
-        print(f"Unique students: {unique_students}")
+        # Create a dictionary for course name mapping
+        course_mapping = {}
+        for _, row in df_mapping.iterrows():
+            official_name = row['official_name']
+            # Add official name as key for itself
+            course_mapping[official_name] = official_name
+            # Add variants as keys
+            for col in ['variant_1', 'variant_2', 'variant_3', 'variant_4']:
+                if pd.notna(row[col]) and row[col] != '':
+                    course_mapping[row[col]] = official_name
+                    
+        print("Successfully loaded course name mapping")
         
-        print("\nCOURSE ENROLLMENT COUNTS:")
-        for course, count in df_enrollments['Course Name'].value_counts().items():
-            print(f"{course}: {count}")
-
-        # Debug code for French courses
-        print("\nDEBUG - French Course Data:")
-        french_courses = [
-            "Le paramétrage de DHIS2 agrégé",
-            "Les fondamentaux de DHIS2 événements",
-            "Les fondamentaux de la saisie et de la validation des données agrégées",
-            "Les principes fondamentaux de DHIS2"
-        ]
+        # Load other data files
+        df_enrollments = pd.read_csv('all_enrollments.csv')
+        df_enrollments['Course Name'] = df_enrollments['Course Name'].map(course_mapping)
         
-        # Check original data
-        print("\nBefore standardization:")
-        original_df = pd.read_csv('all_enrollments.csv', encoding='ISO-8859-1')
-        for course in french_courses:
-            variants = [col for col in original_df['Course Name'].unique() 
-                       if any(word.lower() in col.lower() for word in ['dhis2', 'agrégé', 'événements'])]
-            print(f"\nPossible variants found for {course}:")
-            for variant in variants:
-                count = len(original_df[original_df['Course Name'] == variant])
-                print(f"'{variant}': {count} enrollments")
-
-        # Check after standardization
-        print("\nAfter standardization:")
-        for course in french_courses:
-            count = len(df_enrollments[df_enrollments['Course Name'] == course])
-            print(f"'{course}': {count} enrollments")
-        
-        # After loading df_enrollments, add this diagnostic code
-        print("\nCourse name variations found in enrollments:")
-        for course in sorted(df_enrollments['Course Name'].unique()):
-            if any(word in course.lower() for word in ['dhis2', 'événements', 'agrégé', 'fondamentaux']):
-                count = len(df_enrollments[df_enrollments['Course Name'] == course])
-                print(f"'{course}': {count} enrollments")
-        
-        df_registered = pd.read_csv('all_registered.csv', encoding='ISO-8859-1')
-        df_registered = mapper.standardize_dataframe(df_registered)
-        
-        df_certificates = pd.read_csv('all_certificates.csv', encoding='ISO-8859-1')
-        df_certificates = mapper.standardize_dataframe(df_certificates)
+        df_certificates = pd.read_csv('all_certificates.csv')
+        df_certificates['Course Name'] = df_certificates['Course Name'].map(course_mapping)
         
         df_support_tickets = pd.read_csv('jira_support_tickets.csv', encoding='ISO-8859-1')
-        df_support_tickets = mapper.standardize_dataframe(df_support_tickets)
+        df_support_tickets['Course Name'] = df_support_tickets['Course Name'].map(course_mapping)
         
-        # Convert date columns to datetime
+        # Convert date columns to datetime with more flexible parsing
         df_enrollments['Date Joined'] = pd.to_datetime(df_enrollments['Date Joined'], errors='coerce')
-        df_registered['Date Joined'] = pd.to_datetime(df_registered['Date Joined'], errors='coerce')
         df_certificates['Created Date'] = pd.to_datetime(df_certificates['Created Date'], format='mixed', errors='coerce')
         df_support_tickets['Created'] = pd.to_datetime(df_support_tickets['Created'], errors='coerce')
         df_support_tickets['Updated'] = pd.to_datetime(df_support_tickets['Updated'], errors='coerce')
         
         # Clean any rows with invalid dates
         df_enrollments = df_enrollments.dropna(subset=['Date Joined'])
-        df_registered = df_registered.dropna(subset=['Date Joined'])
         df_certificates = df_certificates.dropna(subset=['Created Date'])
         df_support_tickets = df_support_tickets.dropna(subset=['Created'])
+        
+        # Clean Course IDs by removing trailing slashes
+        df_courses['Course ID'] = df_courses['Course ID'].str.rstrip('/')
         
         # Merge support tickets data with course data
         df_support_tickets = pd.merge(
             df_support_tickets,
             df_courses[['Course Name', 'Course ID']],
             how='left',
-            on='Course Name'
+            left_on='Course Name',
+            right_on='Course Name'
         )
         
-        return df_courses, df_enrollments, df_registered, df_certificates, df_support_tickets
+        return df_courses, df_enrollments, df_certificates, df_support_tickets
         
     except Exception as e:
-        print(f"Error in load_and_preprocess_data: {str(e)}")
-        return None, None, None, None, None
+        print(f"Error loading data: {str(e)}")
+        return None, None, None, None
 
 # Load the data
-df_courses, df_enrollments, df_registered, df_certificates, df_support_tickets = load_and_preprocess_data()
+df_courses, df_enrollments, df_certificates, df_support_tickets = load_and_preprocess_data()
 
 # Add date range filters
 st.sidebar.markdown("### 📅 Date Filters")
 
 # Get min and max dates from enrollment data
-if df_enrollments is not None and not df_enrollments.empty:
-    min_date = df_enrollments['Date Joined'].min()
-    max_date = df_enrollments['Date Joined'].max()
-else:
-    min_date = pd.Timestamp.now()
-    max_date = pd.Timestamp.now()
+min_date = df_enrollments['Date Joined'].min()
+max_date = df_enrollments['Date Joined'].max()
 
 # Add date range selector with default values
 start_date = st.sidebar.date_input(
@@ -172,7 +130,6 @@ filtered_tickets = df_support_tickets[
     (df_support_tickets['Created'] >= pd.Timestamp(start_date)) & 
     (df_support_tickets['Created'] <= pd.Timestamp(end_date))
 ]
-
 # Display the last update date
 if pd.notnull(max_date):
     last_update_str = max_date.strftime('%B %d, %Y')
@@ -186,67 +143,59 @@ start_of_last_30_days = pd.Timestamp(end_date) - pd.Timedelta(days=30)
 start_of_previous_30_days = pd.Timestamp(start_of_last_30_days) - pd.Timedelta(days=30)
 end_of_previous_30_days = pd.Timestamp(start_of_last_30_days) - pd.Timedelta(days=1)
 
-# Filter to include only the 15 core courses
-core_courses = [
-    "Introduction to DHIS2",
-    "Aggregate Data Capture and Validation Fundamentals",
-    "Aggregate Data Analysis Fundamentals",
-    "Les principes fondamentaux de DHIS2",
-    "Data Quality Level 2 Academy",
-    "DHIS2 Events Fundamentals",
-    "Aggregate Customization Fundamentals",
-    "Planning and Budgeting DHIS2 Implementations",
-    "Introduction à DHIS2",
-    "Les fondamentaux de DHIS2 événements",
-    "Introducción a DHIS2",
-    "Le paramétrage de DHIS2 agrégé",
-    "Fundamentos de Captura y Validación de Datos Agregados",
-    "Fundamentos de Configuración de Datos Agregados",
-    "Fundamentos de Análisis de Datos Agregados en DHIS2"
-]
-
-# Filter enrollments to core courses
-df_enrollments = df_enrollments[df_enrollments['Course Name'].isin(core_courses)]
-filtered_enrollments = filtered_enrollments[filtered_enrollments['Course Name'].isin(core_courses)]
-
-# Calculate metrics
-total_enrollments = len(df_enrollments)
-unique_users = df_enrollments['Email'].nunique()
-active_users_current = filtered_enrollments['Email'].nunique()
-active_users_previous = df_enrollments[
-    (df_enrollments['Date Joined'] >= start_of_previous_30_days) & 
-    (df_enrollments['Date Joined'] <= end_of_previous_30_days)
-]['Email'].nunique()
-new_users_diff = active_users_current - active_users_previous
-
-# Support tickets metrics
-total_tickets = filtered_tickets.shape[0]
-tickets_previous = df_support_tickets[
-    (df_support_tickets['Created'] >= start_of_previous_30_days) & 
-    (df_support_tickets['Created'] <= end_of_previous_30_days)
-].shape[0]
-tickets_diff = total_tickets - tickets_previous
-
-# Update the metrics display
+# Aggregator Section
+st.markdown("### 🔍 Aggregated Insights")
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("👤 Total Enrollments", f"{total_enrollments:,}")
-col2.metric("👥 Unique Users", f"{unique_users:,}")
-col3.metric("📬 Tickets (Selected Period)", f"{total_tickets:,}")
-col4.metric("📊 vs Previous Period", f"{tickets_diff:,}", f"{tickets_diff:+}")
+
+# Calculate enrollment metrics
+total_enrollments_all = len(df_enrollments)
+active_course_ids = df_courses['Course ID'].unique()
+active_courses_enrollments = df_enrollments[df_enrollments['Course ID'].isin(active_course_ids)]
+total_enrollments_active = len(active_courses_enrollments)
+total_unique_users_active = active_courses_enrollments['Email'].nunique()
+
+# Calculate previous month enrollments
+today = pd.Timestamp.now()
+start_last_month = today.replace(day=1) - pd.Timedelta(days=1)  # Último día del mes anterior
+start_last_month = start_last_month.replace(day=1)  # Primer día del mes anterior
+end_last_month = today.replace(day=1) - pd.Timedelta(days=1)    # Último día del mes anterior
+
+new_enrollments_last_month = len(active_courses_enrollments[
+    (active_courses_enrollments['Date Joined'] >= start_last_month) & 
+    (active_courses_enrollments['Date Joined'] <= end_last_month)
+])
 
 # Support tickets metrics
-total_tickets = filtered_tickets.shape[0]
-tickets_previous = df_support_tickets[
-    (df_support_tickets['Created'] >= start_of_previous_30_days) & 
-    (df_support_tickets['Created'] <= end_of_previous_30_days)
-].shape[0]
-tickets_diff = total_tickets - tickets_previous
+total_tickets = len(df_support_tickets)
+tickets_last_month = len(df_support_tickets[
+    (df_support_tickets['Created'] >= start_last_month) & 
+    (df_support_tickets['Created'] <= end_last_month)
+])
 
-# Changed "Total Active Users" to "Total Enrollments"
-col1.metric("👤 Total Enrollments", f"{total_enrollments:,}", f"New: {new_users_diff:+}")
-col2.metric("📮 Total Support Tickets", f"{df_support_tickets.shape[0]:,}")
-col3.metric("📬 Tickets (Selected Period)", f"{total_tickets:,}")
-col4.metric("📊 vs Previous Period", f"{tickets_diff:,}", f"{tickets_diff:+}")
+# Calculate previous month for comparison
+start_previous_month = start_last_month - pd.Timedelta(days=30)
+end_previous_month = start_last_month - pd.Timedelta(days=1)
+tickets_previous_month = len(df_support_tickets[
+    (df_support_tickets['Created'] >= start_previous_month) & 
+    (df_support_tickets['Created'] <= end_previous_month)
+])
+tickets_diff = tickets_last_month - tickets_previous_month
+
+# Display metrics
+# First row - Enrollment metrics
+col1.metric("📚 Total Enrollments (All)", f"{total_enrollments_all:,}")
+col2.metric("📚 Active Courses Enrollments", f"{total_enrollments_active:,}", 
+            f"Last month: +{new_enrollments_last_month}")
+col3.metric("👤 Active Courses Unique Users", f"{total_unique_users_active:,}")
+col4.empty()  # Para mantener el espaciado
+
+# Second row - Support tickets metrics
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("📮 Total Support Tickets", f"{total_tickets:,}")
+col2.metric("📬 Last Month Tickets", f"{tickets_last_month:,}")
+col3.metric("📊 vs Previous Month", f"{tickets_diff:,}", 
+            f"{tickets_diff:+}")
+col4.empty()  # Para mantener el espaciado
 
 # Course Completion Rate Ranking
 st.markdown("### 🏆 Course Completion Rate Ranking")
@@ -254,17 +203,20 @@ st.markdown("### 🏆 Course Completion Rate Ranking")
 # Calculate completion rates for all courses
 completion_ranking = []
 for _, course in df_courses.iterrows():
-    total_enrollments = df_enrollments[
+    # Total enrollments (all registrations)
+    total_enrollments = len(df_enrollments[
         df_enrollments['Course ID'] == course['Course ID']
-    ]['Email'].nunique()
+    ])
     
+    # Total completions
     total_completions = df_certificates[
         df_certificates['Course ID'] == course['Course ID']
     ]['Email'].nunique()
     
-    recent_enrollments = filtered_enrollments[
+    # Recent enrollments
+    recent_enrollments = len(filtered_enrollments[
         filtered_enrollments['Course ID'] == course['Course ID']
-    ]['Email'].nunique()
+    ])
     
     completion_rate = (total_completions / total_enrollments * 100) if total_enrollments > 0 else 0
     
@@ -314,95 +266,118 @@ fig_ranking.update_layout(
 
 st.plotly_chart(fig_ranking, use_container_width=True)
 
-# Updated Course Monitoring Section
+# Course Monitoring Section
 st.markdown("### ⚠️ Course Monitoring")
-
-# Calculate average metrics across all courses
-avg_completion_rate = df_ranking['Completion Rate'].mean()
-
-# Calculate average tickets per course
-course_ticket_counts = filtered_tickets.groupby('Course ID').size()
-avg_tickets = course_ticket_counts.mean()
 
 # Calculate monitoring metrics for all courses
 monitoring_data = []
 
+# Get last complete month for analysis
+last_data_date = max(df_enrollments['Date Joined'].max(), df_support_tickets['Created'].max())
+last_month_start = (last_data_date - pd.Timedelta(days=last_data_date.day)).replace(day=1)
+last_month_end = last_month_start + pd.offsets.MonthEnd(0)
+
+st.caption(f"Analyzing period: {last_month_start.strftime('%B %Y')}")
+
 for _, course in df_courses.iterrows():
     course_id = course['Course ID']
     
-    # Get recent enrollments (30 days)
-    recent_enrollments_30d = filtered_enrollments[
-        filtered_enrollments['Course ID'] == course_id
-    ]['Email'].nunique()
+    # Calculate last month metrics
+    last_month_enrollments = len(df_enrollments[
+        (df_enrollments['Course ID'] == course_id) &
+        (df_enrollments['Date Joined'] >= last_month_start) &
+        (df_enrollments['Date Joined'] <= last_month_end)
+    ])
     
-    # Get total tickets in last 30 days
-    course_tickets = len(filtered_tickets[filtered_tickets['Course ID'] == course_id])
+    last_month_tickets = len(df_support_tickets[
+        (df_support_tickets['Course ID'] == course_id) &
+        (df_support_tickets['Created'] >= last_month_start) &
+        (df_support_tickets['Created'] <= last_month_end)
+    ])
     
-    # Calculate completion rate
-    total_enrollments = df_enrollments[
-        df_enrollments['Course ID'] == course_id
-    ]['Email'].nunique()
-    
-    completions = df_certificates[
-        df_certificates['Course ID'] == course_id
-    ]['Email'].nunique()
-    
-    completion_rate = (completions / total_enrollments * 100) if total_enrollments > 0 else 0
-    
-    # Determine alert level based on new criteria
-    alert_level = 'Low'
-    if recent_enrollments_30d == 0 or completion_rate < avg_completion_rate or course_tickets > avg_tickets:
-        alert_level = 'High'
-    
-    monitoring_data.append({
-        'Course Name': course['Course Name'],
-        'Alert Level': alert_level,
-        'Enrollments (30 Days)': recent_enrollments_30d,
-        'Tickets (30 Days)': course_tickets,
-        'Completion Rate': completion_rate
-    })
+    # Get historical data and calculate course age
+    course_enrollments = df_enrollments[df_enrollments['Course ID'] == course_id].copy()
+    course_enrollments['month'] = course_enrollments['Date Joined'].dt.to_period('M')
+    first_enrollment = course_enrollments['Date Joined'].min()
+    months_since_launch = ((last_month_end - first_enrollment).days / 30)
+    is_beta = months_since_launch <= 6  # Courses <= 6 months old are considered beta
 
-# Create monitoring DataFrame with reordered columns
-df_monitoring = pd.DataFrame(monitoring_data)
-df_monitoring = df_monitoring.sort_values('Alert Level', ascending=False)
+    # Calculate monthly statistics
+    monthly_enrollments = course_enrollments.groupby('month').size()
+    course_tickets = df_support_tickets[df_support_tickets['Course ID'] == course_id].copy()
+    course_tickets['month'] = course_tickets['Created'].dt.to_period('M')
+    monthly_tickets = course_tickets.groupby('month').size()
+    
+    # Only analyze courses with at least 3 months of data
+    if len(monthly_enrollments) >= 3:
+        enrollments_mean = monthly_enrollments.mean()
+        enrollments_std = monthly_enrollments.std()
+        tickets_mean = monthly_tickets.mean() if len(monthly_tickets) > 0 else 0
+        
+        # Determine alerts based on course age
+        if is_beta:
+            # Beta courses (≤6 months):
+            # - More tolerant of low enrollments (2 std dev below mean)
+            # - Stricter with tickets (25% above mean triggers alert)
+            is_enrollment_low = last_month_enrollments < (enrollments_mean - 2 * enrollments_std)
+            is_tickets_high = tickets_mean > 0 and last_month_tickets > (tickets_mean * 1.25)
+        else:
+            # Established courses (>6 months):
+            # - Standard enrollment threshold (1 std dev below mean)
+            # - Standard ticket threshold (50% above mean)
+            is_enrollment_low = last_month_enrollments < (enrollments_mean - enrollments_std)
+            is_tickets_high = tickets_mean > 0 and last_month_tickets > (tickets_mean * 1.5)
+        
+        # Check for enrollment peaks (2 std dev above mean)
+        is_enrollment_peak = last_month_enrollments > (enrollments_mean + 2 * enrollments_std)
+        
+        # Generate alert reasons
+        alert_reasons = []
+        if is_enrollment_low:
+            alert_reasons.append("Low enrollments")
+        if is_tickets_high:
+            alert_reasons.append("High ticket volume")
+        if is_enrollment_peak:
+            alert_reasons.append("Enrollment peak")
+        
+        # Set alert level based on conditions
+        if len(alert_reasons) > 0:
+            alert_level = 'High' if (is_enrollment_low and is_tickets_high) else 'Medium'
+            
+            monitoring_data.append({
+                'Course Name': course['Course Name'],
+                'Alert Level': alert_level,
+                'Course Status': 'Beta' if is_beta else 'Established',
+                'Oct Enrollments': last_month_enrollments,
+                'Avg Monthly Enrollments': f"{enrollments_mean:.1f}",
+                'Oct Tickets': last_month_tickets,
+                'Avg Monthly Tickets': f"{tickets_mean:.1f}",
+                'Alert Reasons': ', '.join(alert_reasons)
+            })
 
-# Format numeric columns
-df_monitoring = df_monitoring.assign(
-    **{
-        'Enrollments (30 Days)': df_monitoring['Enrollments (30 Days)'].apply(lambda x: f'{int(x):,}'),
-        'Tickets (30 Days)': df_monitoring['Tickets (30 Days)'].apply(lambda x: f'{int(x):,}'),
-        'Completion Rate': df_monitoring['Completion Rate'].apply(lambda x: f'{x:.1f}%')
-    }
-)
+# Create and display monitoring DataFrame
+if monitoring_data:
+    df_monitoring = pd.DataFrame(monitoring_data)
+    df_monitoring = df_monitoring.sort_values(['Alert Level', 'Oct Enrollments'], ascending=[False, True])
 
-# Define styling function for all columns
-def style_dataframe(val, column_name):
-    if column_name == 'Alert Level':
+    # Apply styling - Red for High alerts, Yellow for Medium
+    def highlight_alert_level(val):
         if val == 'High':
             return 'background-color: #ffcdd2'
-        return 'background-color: #c8e6c9'
-    elif column_name == 'Enrollments (30 Days)':
-        if val == '0':
-            return 'background-color: #ffcdd2'
-    elif column_name == 'Completion Rate':
-        try:
-            rate = float(val.strip('%'))
-            if rate < avg_completion_rate:
-                return 'background-color: #ffcdd2'
-        except:
-            pass
-    elif column_name == 'Tickets (30 Days)':
-        try:
-            tickets = int(val.replace(',', ''))
-            if tickets > avg_tickets:
-                return 'background-color: #ffcdd2'
-        except:
-            pass
-    return ''
+        elif val == 'Medium':
+            return 'background-color: #fff176'
+        return ''
 
-# Apply the styling
-styled_df = df_monitoring.style.apply(lambda x: [style_dataframe(val, col) for val, col in zip(x, df_monitoring.columns)], axis=1)
-st.dataframe(styled_df)
+    # Display the table with styling
+    st.dataframe(
+        df_monitoring.style.apply(
+            lambda x: ['background-color: transparent' if i != 'Alert Level' else highlight_alert_level(x['Alert Level']) 
+                    for i in df_monitoring.columns],
+            axis=1
+        )
+    )
+else:
+    st.info("No courses require attention at this time.")
 
 # Support Ticket Analysis Section
 st.markdown("### 🎫 Support Ticket Analysis")
@@ -425,7 +400,7 @@ total_period_tickets = len(analysis_tickets)
 in_progress_tickets = len(analysis_tickets[analysis_tickets['Status'] == 'In Progress'])
 resolved_tickets = len(analysis_tickets[analysis_tickets['Status'] == 'Done'])
 
-# Calculate average resolution time
+# Calculate average resolution time for resolved tickets
 resolved_ticket_times = []
 for _, ticket in analysis_tickets[analysis_tickets['Status'] == 'Done'].iterrows():
     resolution_days = calculate_business_days(ticket['Created'], ticket['Updated'])
@@ -594,13 +569,14 @@ with st.expander("🎯 Selected Period Performance", expanded=True):
     col3.metric("Period Completion Rate", f"{metrics['Selected Period']['Completion Rate']:.1f}%")
     col4.metric("Period Support Tickets", f"{metrics['Selected Period']['Support Tickets']:,}")
 
-# Enrollment and Support Ticket Trends
+# Enrollment Trend Analysis
 st.markdown("#### 📈 Enrollment and Support Ticket Trends")
 
 # Create two columns for charts
 chart_col1, chart_col2 = st.columns(2)
 
 with chart_col1:
+    # Daily enrollments trend
     daily_enrollments = course_enrollments_period.groupby(
         course_enrollments_period['Date Joined'].dt.date
     ).size().reset_index(name='Enrollments')
@@ -630,7 +606,7 @@ with chart_col1:
         st.info("No enrollment data available for the selected period.")
 
 with chart_col2:
-    # Daily support tickets trend
+    # Support tickets trend
     daily_tickets = course_tickets_period.groupby(
         course_tickets_period['Created'].dt.date
     ).size().reset_index(name='Tickets')
@@ -659,38 +635,21 @@ with chart_col2:
     else:
         st.info("No support tickets data available for the selected period.")
 
-# Ticket Categories Distribution
-st.markdown("#### 📊 Support Ticket Categories")
+# Support Ticket Details for Selected Course
 if len(course_tickets_period) > 0:
-    category_dist = course_tickets_period['Category'].value_counts()
-    fig_category = px.pie(
-        values=category_dist.values,
-        names=category_dist.index,
-        title='Support Ticket Categories Distribution'
+    st.markdown("#### 🎫 Support Ticket Details")
+    
+    # Show ticket status distribution
+    ticket_status = course_tickets_period['Status'].value_counts()
+    fig_status = px.pie(
+        values=ticket_status.values,
+        names=ticket_status.index,
+        title='Ticket Status Distribution'
     )
-    fig_category.update_layout(
-        height=400,
-        showlegend=True,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=-0.2,
-            xanchor="center",
-            x=0.5
-        ),
-        margin=dict(t=30, l=20, r=20, b=20)
-    )
-    fig_category.update_traces(
-        textposition='inside',
-        textinfo='percent+label',
-        marker=dict(colors=['#2E86C1', '#E74C3C', '#2ECC71', '#F1C40F', '#9B59B6'])
-    )
-    st.plotly_chart(fig_category, use_container_width=True)
-else:
-    st.info("No support tickets data available for the selected period.")
+    fig_status.update_traces(textposition='inside', textinfo='percent+label')
+    st.plotly_chart(fig_status, use_container_width=True)
 
-# Calculate resolution times if there are resolved tickets
-if len(course_tickets_period) > 0:
+    # Calculate and display resolution times
     resolved_tickets = course_tickets_period[course_tickets_period['Status'] == 'Done']
     if len(resolved_tickets) > 0:
         resolution_times = []
